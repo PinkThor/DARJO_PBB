@@ -1,9 +1,11 @@
 // ==UserScript==
 // @name         Sidoarjo PBB - Material 3 Expressive
 // @namespace    http://tampermonkey.net/
-// @version      1.2.9
+// @version      1.2.10
 // @description  Material 3 light-by-default GovTech layout with responsive grid forms, hidden sidebar, compact spacing, and self-healing SPOP/LSPOP sections.
 // @author       You
+// @downloadURL  https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/Sidoarjo%20PBB%20-%20Material%203%20Expressive.user.js
+// @updateURL    https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/Sidoarjo%20PBB%20-%20Material%203%20Expressive.user.js
 // @match        https://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n01-form/*
 // @match        https://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n02-form/*
 // @match        https://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n03-form/*
@@ -18,7 +20,7 @@
     'use strict';
 
     console.log(
-        '%c[TM USERSCRIPT] Sidoarjo PBB v1.2.9 — script is running',
+        '%c[TM USERSCRIPT] Sidoarjo PBB v1.2.10 — script is running',
         'background:#6200ee;color:#fff;padding:3px 8px;border-radius:4px;font-weight:bold;'
     );
 

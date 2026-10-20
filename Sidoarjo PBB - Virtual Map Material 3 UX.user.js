@@ -1,9 +1,11 @@
 // ==UserScript==
 // @name         Sidoarjo PBB - Virtual Map Material 3 UX
 // @namespace    http://tampermonkey.net/
-// @version      3.17
+// @version      3.18
 // @description  Material 3 design, Atkinson Hyperlegible Next font, dark/light theme for Virtual Map
 // @author       Antigravity
+// @downloadURL  https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/Sidoarjo%20PBB%20-%20Virtual%20Map%20Material%203%20UX.user.js
+// @updateURL    https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/Sidoarjo%20PBB%20-%20Virtual%20Map%20Material%203%20UX.user.js
 // @match        https://sie.pajakdaerah.sidoarjokab.go.id:440/virtual-map*
 // @run-at       document-idle
 // @grant        none

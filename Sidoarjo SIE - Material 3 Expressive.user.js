@@ -1,9 +1,11 @@
 // ==UserScript==
 // @name         Sidoarjo SIE - Material 3 Expressive
 // @namespace    http://tampermonkey.net/
-// @version      1.3.0
+// @version      1.3.1
 // @description  Material 3 dark theme across the SIE app: permit list, summary count pages, main dashboard, target/realisasi tables, Download Filtered Entry, NOP regional & kecamatan filter, Status Peta filter, and responsive DataTables.
 // @author       You
+// @downloadURL  https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/Sidoarjo%20SIE%20-%20Material%203%20Expressive.user.js
+// @updateURL    https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/Sidoarjo%20SIE%20-%20Material%203%20Expressive.user.js
 // @match        https://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n01-list*
 // @match        https://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n02-list*
 // @match        https://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n03-list*
