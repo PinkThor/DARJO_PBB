@@ -581,6 +581,38 @@
         '#ruteCoordinate:hover .border-2.border-blue-400 {',
         '  background-color: #244b73 !important;',
         '}',
+        '/* Separate compact copy control: 44px minimum hit target for mobile. */',
+        '#buttonActionDetail .tm-copy-coordinate {',
+        '  all: unset;',
+        '  box-sizing: border-box;',
+        '  display: inline-flex !important;',
+        '  align-items: center !important;',
+        '  justify-content: center !important;',
+        '  width: 44px !important;',
+        '  min-width: 44px !important;',
+        '  height: 44px !important;',
+        '  padding: 0 !important;',
+        '  border: 1px solid var(--m3-outline) !important;',
+        '  border-radius: 14px !important;',
+        '  background: var(--m3-surface-1) !important;',
+        '  color: var(--m3-primary) !important;',
+        '  cursor: pointer;',
+        '  touch-action: manipulation;',
+        '  box-shadow: 0 2px 6px rgba(0,0,0,0.15) !important;',
+        '}',
+        '#buttonActionDetail .tm-copy-coordinate:hover, #buttonActionDetail .tm-copy-coordinate:focus-visible {',
+        '  background: var(--m3-primary-container) !important;',
+        '  outline: 2px solid var(--m3-primary) !important;',
+        '  outline-offset: 2px;',
+        '}',
+        '#buttonActionDetail .tm-copy-coordinate svg {',
+        '  width: 19px !important;',
+        '  height: 19px !important;',
+        '  margin: 0 !important;',
+        '}',
+        '#buttonActionDetail .tm-copy-coordinate.tm-copied {',
+        '  color: var(--m3-success) !important;',
+        '}',
         '#riwayatSppt, #riwayatPenugasan {',
         '  background-color: var(--m3-surface-2) !important;',
         '  color: var(--m3-on-surface) !important;',
@@ -1111,10 +1143,79 @@
         }
     }
 
+    // ── Coordinate extraction + clipboard helper ──
+    // Parse coordinates from the live Google Maps URL instead of hardcoding
+    // site-specific values; supports both search and directions URL formats.
+    function getRuteCoordinates(el) {
+        var href = el && (el.getAttribute('href') || '');
+        var match = href.match(/(-?\d{1,3}\.\d+)\s*,\s*(?:%20)?(-?\d{1,3}\.\d+)/i);
+        if (!match) return null;
+        return match[1] + ',' + match[2];
+    }
+
+    function copyTextToClipboard(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+            return navigator.clipboard.writeText(text);
+        }
+
+        // Fallback for mobile browsers/userscript contexts without Clipboard API.
+        return new Promise(function (resolve, reject) {
+            var field = document.createElement('textarea');
+            field.value = text;
+            field.setAttribute('readonly', '');
+            field.style.position = 'fixed';
+            field.style.opacity = '0';
+            field.style.pointerEvents = 'none';
+            document.body.appendChild(field);
+            field.select();
+            field.setSelectionRange(0, field.value.length);
+            var copied = false;
+            try { copied = document.execCommand('copy'); } catch (e) { /* denied */ }
+            document.body.removeChild(field);
+            if (copied) resolve();
+            else reject(new Error('Clipboard copy was denied'));
+        });
+    }
+
+    function installCoordinateCopyButton(link) {
+        if (!link || document.getElementById('tmCopyCoordinate')) return;
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.id = 'tmCopyCoordinate';
+        button.className = 'tm-copy-coordinate';
+        button.setAttribute('aria-label', 'Salin koordinat');
+        button.setAttribute('title', 'Salin koordinat');
+        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"></path></svg>';
+        button.addEventListener('click', function () {
+            var coordinates = getRuteCoordinates(link);
+            if (!coordinates) {
+                button.setAttribute('aria-label', 'Koordinat tidak tersedia');
+                return;
+            }
+            copyTextToClipboard(coordinates).then(function () {
+                button.classList.add('tm-copied');
+                button.setAttribute('aria-label', 'Koordinat disalin: ' + coordinates);
+                button.setAttribute('title', 'Koordinat disalin');
+                window.setTimeout(function () {
+                    button.classList.remove('tm-copied');
+                    button.setAttribute('aria-label', 'Salin koordinat');
+                    button.setAttribute('title', 'Salin koordinat');
+                }, 1400);
+            }).catch(function (error) {
+                console.warn('[TM-VMap] Coordinate copy failed:', error);
+                button.setAttribute('aria-label', 'Gagal menyalin koordinat');
+            });
+        });
+
+        var actions = link.parentElement;
+        if (actions) actions.insertBefore(button, link.nextSibling);
+    }
+
     // ── Rute Link Formatter MutationObserver ──
     function observeRute() {
         var el = document.getElementById('ruteCoordinate');
         if (!el) return;
+        installCoordinateCopyButton(el);
 
         var formatHref = function () {
             var href = el.getAttribute('href') || '';
