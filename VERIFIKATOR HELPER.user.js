@@ -1,11 +1,15 @@
 // ==UserScript==
 // @name         VERIFIKATOR HELPER - SPOP/LSPOP Sidoarjo
 // @namespace    http://tampermonkey.net/
+// @downloadURL https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/Sidoarjo%20PBB%20-%20Material%203%20Expressive%20(Compact).user.js
+// @updateURL   https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/Sidoarjo%20PBB%20-%20Material%203%20Expressive%20(Compact).user.js
 // @version      3.11.0
 // @description  Otomatis memverifikasi seluruh SPOP & LSPOP pada halaman permohonan PBB Sidoarjo, menampilkan temuan sebagai toast notification persistent (tutup dengan X). Termasuk highlight baris & deteksi dirty state.
 // @author       You
 // @match        https://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n02-form/*
 // @match        http://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n02-form/*
+// @match        https://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n03-form/*
+// @match        http://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n03-form/*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
