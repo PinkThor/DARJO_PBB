@@ -1,6 +1,8 @@
 // ==UserScript==
 // @name         Sidoarjo PBB - Material 3 Expressive (Compact)
 // @namespace    http://tampermonkey.net/
+// @downloadURL https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/Sidoarjo%20PBB%20-%20Material%203%20Expressive%20(Compact).user.js
+// @updateURL   https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/Sidoarjo%20PBB%20-%20Material%203%20Expressive%20(Compact).user.js
 // @version      1.3.1
 // @description  Compact variant of the Material 3 Expressive GovTech layout: denser forms, 3-column LSPOP modal, tighter tables, no dead whitespace.
 // @author       You
