@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sidoarjo PBB - Material 3 Expressive
 // @namespace    http://tampermonkey.net/
-// @version      1.2.10
+// @version      1.2.12
 // @description  Material 3 light-by-default GovTech layout with responsive grid forms, hidden sidebar, compact spacing, and self-healing SPOP/LSPOP sections.
 // @author       You
 // @downloadURL  https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/Sidoarjo%20PBB%20-%20Material%203%20Expressive.user.js
@@ -18,6 +18,11 @@
 
 (function () {
     'use strict';
+
+    // Yield to the Compact variant if it is also installed.
+    if (window.__tmCompactLoaded) return;
+
+    window.__tmBaseLoaded = true;
 
     console.log(
         '%c[TM USERSCRIPT] Sidoarjo PBB v1.2.10 — script is running',
@@ -37,6 +42,10 @@
     const _cleanups = [];
     const onUnload = fn => _cleanups.push(fn);
     window.addEventListener('pagehide', () => _cleanups.forEach(fn => fn()), { once: true });
+    // Exposed so the Compact variant can fully retire this script when both
+    // are installed: disconnecting the observers stops the duplicate scan
+    // loop instead of leaving two of them racing on the same DOM.
+    window.__tmBaseTeardown = () => _cleanups.forEach(fn => fn());
 
     /* ─── Safe LocalStorage Exception Wrappers ─── */
     function safeGetStorage(key) {
@@ -50,6 +59,7 @@
 
     /* ─── Standard DOM Injection for Added Style Patches ─── */
     const patchStyle = document.createElement('style');
+    patchStyle.id = 'tm-base-patch';
     patchStyle.textContent = `
         /* ─── Added Patch: Select2 Floating Dropdown Depth Fixes ─── */
         .select2-container--open {
@@ -64,15 +74,14 @@
     (document.head || document.documentElement).appendChild(patchStyle);
 
     /* ─── Font ─── */
-    document.head.appendChild(
-        Object.assign(document.createElement('link'), {
-            rel: 'stylesheet',
-            href: 'https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400;1,700&display=swap'
-        })
-    );
+    // v1.2.11: the Google Fonts <link> was silently blocked by the site's
+    // CSP (font-src 'self' data:), so Atkinson Hyperlegible never loaded.
+    // Use a self-hosted-friendly system stack instead; no external request.
+    const tmFontStack = "'Segoe UI', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
 
     /* ─── Material 3 Expressive Dark ─── */
     const styleEl = document.createElement('style');
+    styleEl.id = 'tm-base-theme';
     styleEl.textContent = `
         :root {
             --m3-surface: #0D1117;
@@ -97,7 +106,7 @@
         html, body, .page-wrapper, .container-fluid {
             background: var(--m3-surface) !important;
             color: var(--m3-on-surface) !important;
-            font-family: 'Atkinson Hyperlegible', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+            font-family: 'Segoe UI', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important;
             -webkit-font-smoothing: antialiased;
         }
         /* Empty breadcrumb bar (page title + right-side toolbar that never
@@ -420,7 +429,7 @@
         }
         .btn {
             border-radius: var(--m3-radius-sm) !important;
-            font-family: 'Atkinson Hyperlegible', sans-serif !important;
+            font-family: 'Segoe UI', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important;
             font-weight: 500;
             font-size: 13px;
             letter-spacing: .025em;
@@ -1565,6 +1574,21 @@
             background: rgba(30, 180, 80, 0.06) !important;
             border-color: rgba(30, 180, 80, 0.35) !important;
         }
+        /* ─── Reduced motion & accessibility (v1.2.11) ─── */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+                scroll-behavior: auto !important;
+            }
+        }
+        .tm-card-toggle-btn:focus-visible,
+        #tm-theme-toggle:focus-visible,
+        .tm-m3-btn:focus-visible {
+            outline: 2px solid var(--m3-primary) !important;
+            outline-offset: 2px !important;
+        }
         /* ─── Theme toggle button ─── */
         #tm-theme-toggle {
             position: fixed;
@@ -2441,6 +2465,7 @@
         // backdrop makes the "this is modal-ish, click away to close"
         // relationship visible while it's open, same pattern as the
         // existing modal/customizer overlays elsewhere in this script.
+        document.querySelectorAll('.tm-sidebar-backdrop').forEach(el => el.remove());
         const backdrop = document.createElement('div');
         backdrop.className = 'tm-sidebar-backdrop';
         document.body.appendChild(backdrop);
@@ -2497,6 +2522,10 @@
         };
 
         // Intercept during capture phase to prevent page script conflicts
+        if (window.__tmCustomizerCapture) document.body.removeEventListener('click', window.__tmCustomizerCapture, true);
+        if (window.__tmCustomizerBubble) document.body.removeEventListener('click', window.__tmCustomizerBubble);
+        window.__tmCustomizerCapture = onCaptureClick;
+        window.__tmCustomizerBubble = onBubbleClick;
         document.body.addEventListener('click', onCaptureClick, true);
         // Handle outside click dismissal in the bubble phase
         document.body.addEventListener('click', onBubbleClick);
@@ -3831,7 +3860,7 @@
            per header. Diagnostics logged to console so a silent failure
            (e.g. selector no longer matching after a page markup change)
            is visible instead of just "nothing happens". */
-    document.addEventListener('click', (e) => {
+    const onCardToggleClick = (e) => {
         const header = e.target.closest(
             '.tm-section-card > .w-100.text-center, ' +
             '.tm-section-card > .tm-sertifikat-header-bar'
@@ -3850,7 +3879,12 @@
             const nowCollapsed = card.classList.toggle('tm-card-collapsed');
             console.log(`[tm][collapse] toggled — collapsed=${nowCollapsed}`, card);
         }
-    });
+    };
+    // Shared slot so the Compact variant can detach this handler cleanly
+    // instead of leaving a second copy that cancels the first one out.
+    if (window.__tmCardToggleHandler) document.removeEventListener('click', window.__tmCardToggleHandler);
+    window.__tmCardToggleHandler = onCardToggleClick;
+    document.addEventListener('click', onCardToggleClick);
 
     /* ─── Light/dark theme toggle ─── */
     function createThemeToggle() {
@@ -3860,9 +3894,26 @@
         // still get light either way; only 'dark' now requires an explicit
         // stored preference or a click on the toggle.
         const stored = safeGetStorage('tm-theme');
-        if (stored !== 'dark') document.documentElement.classList.add('tm-light');
+        if (stored === 'dark') {
+            // explicit dark
+        } else if (stored === 'light') {
+            document.documentElement.classList.add('tm-light');
+        } else {
+            // no stored pref: follow OS color scheme
+            const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            if (!prefersDark) document.documentElement.classList.add('tm-light');
+            try {
+                window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+                    if (safeGetStorage('tm-theme')) return; // user explicitly chose
+                    document.documentElement.classList.toggle('tm-light', !e.matches);
+                    const b = document.getElementById('tm-theme-toggle');
+                    if (b) b.textContent = document.documentElement.classList.contains('tm-light') ? '🌙' : '☀️';
+                });
+            } catch (e) {}
+        }
 
         const isLight = () => document.documentElement.classList.contains('tm-light');
+        document.querySelectorAll('#tm-theme-toggle').forEach(el => el.remove());
         const btn = document.createElement('button');
         btn.id = 'tm-theme-toggle';
         btn.title = 'Toggle light / dark mode';
