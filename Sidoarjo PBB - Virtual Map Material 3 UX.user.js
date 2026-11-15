@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sidoarjo PBB - Virtual Map Material 3 UX
 // @namespace    http://tampermonkey.net/
-// @version      3.18
+// @version      3.19
 // @description  Material 3 design, Atkinson Hyperlegible Next font, dark/light theme for Virtual Map
 // @author       Antigravity
 // @downloadURL  https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/Sidoarjo%20PBB%20-%20Virtual%20Map%20Material%203%20UX.user.js
@@ -1353,12 +1353,15 @@
 
         var processAll = function () {
             observer.disconnect();
-            var uncompacted = list.querySelectorAll('> div:not([data-tm-compact="1"])');
-            for (var i = 0; i < uncompacted.length; i++) {
-                compactRiwayatCard(uncompacted[i]);
+            try {
+                var uncompacted = list.querySelectorAll(':scope > div:not([data-tm-compact="1"])');
+                for (var i = 0; i < uncompacted.length; i++) {
+                    compactRiwayatCard(uncompacted[i]);
+                }
+                shrinkStatusBadges(list);
+            } finally {
+                observer.observe(list, { childList: true, subtree: true });
             }
-            shrinkStatusBadges(list);
-            observer.observe(list, { childList: true, subtree: true });
         };
 
         var scheduled = false;
@@ -1606,7 +1609,7 @@
         console.log('[TM-VMap] Rute link observer initialized');
         observeStaticLabel('riwayatSppt', 'eCT');
         console.log('[TM-VMap] riwayatSppt label override initialized');
-        observeStaticLabel('riwayatPenugasan', '?');
+        observeStaticLabel('riwayatPenugasan', 'Penugasan');
         console.log('[TM-VMap] riwayatPenugasan label override initialized');
         observeRiwayatList();
         console.log('[TM-VMap] Riwayat list compactor initialized');
