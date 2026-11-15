@@ -1,6 +1,8 @@
 // ==UserScript==
 // @name         RUMUS NJOP BANGUNAN - Tampermonkey
 // @namespace    http://tampermonkey.net/
+// @downloadURL https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/RUMUS%20NJOP%20BANGUNAN.user.js
+// @updateURL   https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/RUMUS%20NJOP%20BANGUNAN.user.js
 // @version      1.0.0
 // @description  Implementasi RUMUS-NJOP-BANGUNAN (PENILAIAN_BNG) pada halaman permohonan PBB Sidoarjo. Kalkulator live + nilai per baris LSPOP.
 // @author       You
