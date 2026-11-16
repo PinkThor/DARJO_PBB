@@ -6,8 +6,12 @@
 // @version      1.0.1
 // @description  Implementasi RUMUS-NJOP-BANGUNAN (PENILAIAN_BNG) pada halaman permohonan PBB Sidoarjo. Kalkulator live + nilai per baris LSPOP.
 // @author       You
+// @match        https://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n01-form/*
+// @match        http://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n01-form/*
 // @match        https://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n02-form/*
 // @match        http://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n02-form/*
+// @match        https://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n03-form/*
+// @match        http://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n03-form/*
 // @run-at       document-idle
 // @noframes
 // @grant        none
