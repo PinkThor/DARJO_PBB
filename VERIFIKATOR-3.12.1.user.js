@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @downloadURL https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/VERIFIKATOR%20HELPER.user.js
 // @updateURL   https://raw.githubusercontent.com/PinkThor/DARJO_PBB/main/VERIFIKATOR%20HELPER.user.js
-// @version      3.12.0
+// @version      3.12.1
 // @description  Otomatis memverifikasi seluruh SPOP & LSPOP pada halaman permohonan PBB Sidoarjo, menampilkan temuan sebagai toast notification persistent (tutup dengan X). v3.12: dukungan Mutasi Penuh (n2n01-form) = diff nilai existing (text-success float-right) vs permohonan, deteksi NIK filler=NOP, toleransi luas wajar, hitung revisi dari riwayat; perbaikan layout kolom spopTable n2n03 (kolom NOP) & baris NOP asal pada Mutasi Gabung tidak dianggap error.
 // @author       You
 // @match        https://sie.pajakdaerah.sidoarjokab.go.id:440/permohonan/int/n2n01-form/*
@@ -37,6 +37,9 @@
    *    (dulu jadi vh-row-bad palsu); muncul info ringkas "NOP asal → induk, verifikasi manual".
    * 4. Cek induk vs bagian: bandingkan luas INDUK ASLI (marker) dengan induk baru + jumlah bagian
    *    (bukan hanya jumlah bagian), sehingga mutasi yang memotong induk tidak false-positive.
+   * 5. Toast: fallback warna ikut preferensi tema (localStorage tm-theme) bila halaman tidak
+   *    menyediakan variabel --m3 (light → kartu putih, dark → #161B22); SEMUA level toast
+   *    persisten sampai ditutup ✕ (auto-hide 6 detik untuk level info dihapus).
    * ────────────────────────────────────────────────────*/
 
   const CACHE = window.__verifCache || (window.__verifCache = { spop: new Map(), lspop: new Map() });
@@ -474,20 +477,30 @@
   }
 
   /* ── Theme-aware styles (aligns with Material 3 Expressive theming) ── */
+  // Palet fallback toast: ikut preferensi tema (localStorage tm-theme) bila halaman
+  // tidak menyediakan variabel --m3-* (mis. Compact tidak terpasang di halaman itu).
+  function toastFallbackPalette(){
+    let t = 'dark';
+    try { if ((localStorage.getItem('tm-theme')||'') === 'light') t = 'light'; } catch(e){}
+    return t === 'light'
+      ? { surface:'#FFFFFF', onSurface:'#1F2328', onSurfaceVariant:'#57606A', outline:'#D0D7DE', shadow:'rgba(0,0,0,.12)' }
+      : { surface:'#161B22', onSurface:'#E1E3E5', onSurfaceVariant:'#A8B0B8', outline:'#30363D', shadow:'rgba(0,0,0,.25)' };
+  }
   function injectVhStyles(){
     if(document.getElementById('vh-styles')) return;
+    const P = toastFallbackPalette();
     const st = document.createElement('style');
     st.id = 'vh-styles';
     st.textContent = [
       '#vh-toast-host { font-family: inherit; pointer-events:none; }',
-      '.vh-toast { background: var(--m3-surface-1, #161B22); color: var(--m3-on-surface, #E1E3E5); border-left: 4px solid var(--m3-outline, #30363D); border-radius: var(--m3-radius-sm, 6px); padding: 8px 10px; box-shadow: 0 2px 8px rgba(0,0,0,.25); font-size: 12px; display: flex; gap: 6px; align-items: flex-start; pointer-events:auto; }',
+      '.vh-toast { background: var(--m3-surface-1, '+P.surface+'); color: var(--m3-on-surface, '+P.onSurface+'); border-left: 4px solid var(--m3-outline, '+P.outline+'); border-radius: var(--m3-radius-sm, 6px); padding: 8px 10px; box-shadow: 0 2px 8px '+P.shadow+'; font-size: 12px; display: flex; gap: 6px; align-items: flex-start; pointer-events:auto; }',
       '.vh-toast--error { border-left-color: var(--m3-error, #FF7B72); }',
       '.vh-toast--warn  { border-left-color: var(--m3-tertiary, #FFD6A5); }',
       '.vh-toast--info  { border-left-color: var(--m3-primary, #79C0FF); }',
       '.vh-toast__icon { flex-shrink: 0; }',
       '.vh-toast__body { flex: 1; line-height: 1.4; }',
-      '.vh-toast__close { background: none; border: none; font-size: 14px; cursor: pointer; color: var(--m3-on-surface-variant, #A8B0B8); padding: 0 2px; line-height: 1; }',
-      '.vh-toast__close:hover { color: var(--m3-on-surface, #E1E3E5); }',
+      '.vh-toast__close { background: none; border: none; font-size: 14px; cursor: pointer; color: var(--m3-on-surface-variant, '+P.onSurfaceVariant+'); padding: 0 2px; line-height: 1; }',
+      '.vh-toast__close:hover { color: var(--m3-on-surface, '+P.onSurface+'); }',
       '.vh-row-bad { outline: 2px solid var(--m3-error, #FF7B72) !important; background-color: color-mix(in srgb, var(--m3-error, #FF7B72) 14%, transparent) !important; }',
     ].join('\n');
     (document.head || document.documentElement).appendChild(st);
@@ -530,10 +543,8 @@
     btn.addEventListener('click', ()=>{ el.remove(); activeToasts.delete(issue.key); dismissedKeys.add(issue.key); });
     toastHost.appendChild(el);
     activeToasts.set(issue.key, el);
-    // auto-dismiss info toasts
-    if(issue.level === 'info'){
-      setTimeout(()=>{ if(activeToasts.has(issue.key)){ el.remove(); activeToasts.delete(issue.key); } }, 6000);
-    }
+    // v3.12.1: semua level toast PERSISTEN sampai ditutup ✕ (atau issue hilang saat re-scan).
+    // (auto-hide 6 detik untuk level info dihapus — diff mutasi perlu waktu baca.)
   }
   function removeStaleToasts(currentKeys){
     for(const [key, el] of Array.from(activeToasts.entries())){
