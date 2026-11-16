@@ -1394,6 +1394,42 @@
                 box-sizing: border-box;
                 margin: 0;
             `;
+            // Debounce search so typing is uninterrupted on server-side DataTables.
+            // The query still searches the full dataset (server-side/global search).
+            if (typeof jQuery !== 'undefined' && jQuery.fn && jQuery.fn.DataTable) {
+                const $tbl = jQuery('#' + tableId);
+                if ($tbl.length && jQuery.fn.DataTable.isDataTable($tbl)) {
+                    const dt = $tbl.DataTable();
+                    const $input = jQuery(searchInput);
+                    // Remove DataTables' default per-keystroke handler to avoid a request on every digit.
+                    $input.off('keyup.DT input.DT search.DT');
+                    let tmSearchTimer = null;
+                    const runSearch = () => {
+                        tmSearchTimer = null;
+                        const val = searchInput.value;
+                        if (dt.search() !== val) {
+                            dt.search(val).draw();
+                        } else if (val === '' && dt.search() !== '') {
+                            dt.search('').draw();
+                        }
+                    };
+                    $input.on('input.tmSearch', () => {
+                        clearTimeout(tmSearchTimer);
+                        tmSearchTimer = setTimeout(runSearch, 450);
+                    });
+                    $input.on('keydown.tmSearch', (e) => {
+                        if (e.key === 'Enter') {
+                            clearTimeout(tmSearchTimer);
+                            runSearch();
+                        }
+                    });
+                    $input.on('search.tmSearch', () => {
+                        // Native "x" clear in type=search inputs.
+                        clearTimeout(tmSearchTimer);
+                        runSearch();
+                    });
+                }
+            }
         }
 
         const compressedInfo = document.createElement('div');
