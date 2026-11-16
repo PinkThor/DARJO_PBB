@@ -696,9 +696,32 @@
         const $table = jQuery('#' + tableId);
         if (!$table.length || !jQuery.fn.DataTable.isDataTable($table)) return;
         const dt = $table.DataTable();
-        if (dt.page.len() !== length) {
-            dt.page.len(length).draw();
+        if (dt.page.len() === length) return;
+        const loader = window._tmFullData && window._tmFullData[tableId];
+        // If our full-dataset loader is active or ready, avoid a server-side draw/re-pull.
+        if (loader && (loader.isLoading() || loader.isReady())) {
+            try {
+                const settings = dt.settings()[0];
+                if (settings && settings.oFeatures) settings.oFeatures.bServerSide = false;
+                if (settings) settings.bServerSide = false;
+            } catch (_) {}
+            dt.page.len(length);
+            if (loader.isReady()) dt.draw(false);
+            return;
         }
+        // Server-side: setting len triggers an XHR+processing flash; prefer local change
+        // when possible and let normal draws handle it, but keep behavior functional.
+        const settings = dt.settings()[0];
+        const isSS = !!(settings && (settings.oFeatures ? settings.oFeatures.bServerSide : settings.bServerSide));
+        if (isSS) {
+            // Defer to avoid racing init; do a single draw (normal UX) but don't spam.
+            if ($table.data('tmLenSet')) return;
+            $table.data('tmLenSet', true);
+            dt.page.len(length);
+            dt.draw(false);
+            return;
+        }
+        dt.page.len(length).draw(false);
     }
     function initDefaultPageLengths() {
         setDefaultPageLength('permitList', 100);
@@ -708,7 +731,10 @@
     const pageLengthInterval = setInterval(() => {
         initDefaultPageLengths();
         pageLengthAttempts++;
-        if (pageLengthAttempts >= 20) clearInterval(pageLengthInterval);
+        const gLoader = window._tmFullData && window._tmFullData.globalTable;
+        if (pageLengthAttempts >= 20 || (gLoader && (gLoader.isLoading() || gLoader.isReady()))) {
+            clearInterval(pageLengthInterval);
+        }
     }, 500);
 
     document.querySelectorAll('.page-breadcrumb .breadcrumb-item a').forEach(a => {
@@ -871,50 +897,68 @@
                 }
             });
 
-            // ── True full export (server-side paging) ──
-            // DataTables only keeps the current page in memory, so walk every
-            // page 0..N-1, collect dt.rows({page:'current'}) after each server
-            // round-trip, and feed the FULL array into the CSV builder below.
-            const info = dt.page.info();
-            const pageLen = dt.page.len() || info.length || 100;
-            const totalPages = Math.max(1, Math.ceil((info.recordsFiltered || filteredCount) / pageLen));
-            const startPage = info.page;
-
-            const collectCurrentPageRows = () => {
-                const pageRows = [];
-                dt.rows({ page: 'current' }).every(function () {
-                    const rowNode = this.node();
-                    const rowData = [];
-                    if (rowNode) {
-                        jQuery(rowNode).find('td').each(function (i) {
-                            if (i < jQuery(rowNode).find('td').length - 1) {
-                                rowData.push(jQuery(this).text().trim());
-                            }
-                        });
-                    } else {
-                        const d = this.data();
-                        if (Array.isArray(d)) {
-                            rowData.push(...d.slice(0, -1).map(x => String(x == null ? '' : x).replace(/<[^>]*>/g, '').trim()));
-                        } else if (typeof d === 'object') {
-                            dt.columns().every(function (colIdx) {
-                                if (colIdx < dt.columns().count() - 1) {
-                                    let cData = dt.cell(this.index(), colIdx).render('display');
-                                    rowData.push(String(cData == null ? '' : cData).replace(/<[^>]*>/g, '').trim());
-                                }
-                            });
+            const collectRow = (rowNode, rowDataObj, rowIdx) => {
+                const rowData = [];
+                if (rowNode) {
+                    jQuery(rowNode).find('td').each(function (i) {
+                        if (i < jQuery(rowNode).find('td').length - 1) {
+                            rowData.push(jQuery(this).text().trim());
                         }
-                    }
-                    pageRows.push(rowData);
-                });
-                return pageRows;
+                    });
+                } else if (Array.isArray(rowDataObj)) {
+                    rowData.push(...rowDataObj.slice(0, -1).map(x => String(x == null ? '' : x).replace(/<[^>]*>/g, '').trim()));
+                } else if (rowDataObj && typeof rowDataObj === 'object') {
+                    dt.columns().every(function (colIdx) {
+                        if (colIdx < dt.columns().count() - 1) {
+                            let cData = dt.cell(rowIdx, colIdx).render('display');
+                            rowData.push(String(cData == null ? '' : cData).replace(/<[^>]*>/g, '').trim());
+                        }
+                    });
+                }
+                return rowData;
             };
 
-            // Await each server round-trip by resolving on the DataTables
-            // 'xhr' event (fires when the ajax request for that page returns).
-            const isServerSide = !!(dt.settings()[0] && dt.settings()[0].serverSide);
-            const waitForRoundTrip = () => {
-                if (!isServerSide) return Promise.resolve();
-                return new Promise((resolve) => {
+            setButtonBusy(true);
+
+            const isServerSide = !!(dt.settings()[0] && (dt.settings()[0].oFeatures ? dt.settings()[0].oFeatures.bServerSide : dt.settings()[0].serverSide));
+            const tmLoader = window._tmFullData && window._tmFullData[tableId];
+
+            if (isServerSide && tmLoader && typeof tmLoader.ensure === 'function') {
+                // Proposal 3 integration: piggyback on the single throttled full-data
+                // fetch (or reuse the cached client-side dataset) instead of issuing
+                // a second page-walk that would double server load.
+                if (typeof tmLoader.isReady === 'function' && tmLoader.isReady()) {
+                    dt.rows({ search: 'applied' }).every(function (rIdx) {
+                        exportRows.push(collectRow(this.node(), this.data(), rIdx));
+                    });
+                } else {
+                    if (triggerBtn) triggerBtn.innerHTML = '<span>memuat…</span>';
+                    await tmLoader.ensure();
+                    dt.rows({ search: 'applied' }).every(function (rIdx) {
+                        exportRows.push(collectRow(this.node(), this.data(), rIdx));
+                    });
+                }
+            } else if (!isServerSide) {
+                // Already client-side (full dataset in memory): export instantly.
+                dt.rows({ search: 'applied' }).every(function (rIdx) {
+                    exportRows.push(collectRow(this.node(), this.data(), rIdx));
+                });
+            } else {
+                // Fallback: true full export by walking server-side pages.
+                const info = dt.page.info();
+                const pageLen = dt.page.len() || info.length || 100;
+                const totalPages = Math.max(1, Math.ceil((info.recordsFiltered || filteredCount) / pageLen));
+                const startPage = info.page;
+
+                const collectCurrentPageRows = () => {
+                    const pageRows = [];
+                    dt.rows({ page: 'current' }).every(function (rIdx) {
+                        pageRows.push(collectRow(this.node(), this.data(), rIdx));
+                    });
+                    return pageRows;
+                };
+
+                const waitForRoundTrip = () => new Promise((resolve) => {
                     let settled = false;
                     const finish = (json) => {
                         if (!settled) {
@@ -925,25 +969,23 @@
                     };
                     const handler = (e, settings, json) => finish(json);
                     dt.on('xhr.tmDownloadAll', handler);
-                    // Safety net so the loop can never hang on a missing XHR.
                     setTimeout(() => finish(null), 60000);
                 });
-            };
 
-            setButtonBusy(true);
-            for (let page = 0; page < totalPages; page++) {
-                if (triggerBtn) {
-                    triggerBtn.innerHTML = `<span>${page + 1}/${totalPages}</span>`;
+                for (let page = 0; page < totalPages; page++) {
+                    if (triggerBtn) {
+                        triggerBtn.innerHTML = `<span>${page + 1}/${totalPages}</span>`;
+                    }
+                    const roundTrip = waitForRoundTrip();
+                    dt.page(page).draw(false); // server-side: one XHR per page
+                    await roundTrip;
+                    exportRows.push(...collectCurrentPageRows());
                 }
-                const roundTrip = waitForRoundTrip();
-                dt.page(page).draw(false); // server-side: one XHR per page
-                await roundTrip;
-                exportRows.push(...collectCurrentPageRows());
-            }
 
-            // Give the table back to the page the user was on.
-            if (startPage < totalPages && dt.page() !== startPage) {
-                dt.page(startPage).draw(false);
+                // Give the table back to the page the user was on.
+                if (startPage < totalPages && dt.page() !== startPage) {
+                    dt.page(startPage).draw(false);
+                }
             }
 
             // ── CSV UTF-8 with BOM (same builder as before) ──
@@ -1142,65 +1184,77 @@
         }
 
         function isRowPetaChecked(dt, rowIdx, colIdx, rowData, searchData) {
+            const hasIdx = rowIdx !== undefined && rowIdx !== null && rowIdx !== -1;
+            const hasCol = colIdx !== undefined && colIdx !== null && colIdx !== -1;
+
             // 1. LIVE DOM checkbox node — checked FIRST: a checkbox the user
-            //    just toggled must win over stale server-side dt.row data,
-            //    otherwise the status-peta badges would ignore an unpersisted
-            //    toggle until the next server round-trip.
-            if (dt && rowIdx !== undefined && colIdx !== undefined) {
+            //    just toggled must win over stale/server data. (Only reliable for
+            //    rendered rows; non-rendered client-side rows fall through to data.)
+            if (dt && hasIdx && hasCol) {
                 try {
                     const cellNode = dt.cell(rowIdx, colIdx).node();
                     if (cellNode) {
                         const cb = cellNode.querySelector('input[type="checkbox"]');
-                        if (cb) return cb.checked;
+                        if (cb) return !!cb.checked;
                     }
                 } catch (e) {}
             }
 
-            // 2. Direct check on the raw row object (fastest for AJAX DataTables)
-            if (rowData && typeof rowData === 'object') {
-                if ('status_peta' in rowData) {
-                    const sp = rowData.status_peta;
-                    return sp == 1 || sp === true || sp === '1';
+            const evalVal = (v) => {
+                if (v == null) return null;
+                if (typeof v === 'boolean') return v;
+                if (typeof v === 'number') return v === 1;
+                const s = String(v);
+                // Rendered checkbox HTML takes precedence as an explicit signal.
+                if (/type\s*=\s*["']?checkbox/i.test(s)) {
+                    return /checked/i.test(s);
                 }
-                if ('is_peta' in rowData) {
-                    const sp = rowData.is_peta;
-                    return sp == 1 || sp === true || sp === '1';
-                }
-            }
-
-            // 3. dt.row().data() — the server snapshot; only trusted when the
-            //    live cell carries no checkbox.
-            if (dt && rowIdx !== undefined) {
-                try {
-                    const rData = dt.row(rowIdx).data();
-                    if (rData && typeof rData === 'object') {
-                        if ('status_peta' in rData) {
-                            const sp = rData.status_peta;
-                            return sp == 1 || sp === true || sp === '1';
-                        }
-                        if ('is_peta' in rData) {
-                            const sp = rData.is_peta;
-                            return sp == 1 || sp === true || sp === '1';
-                        }
-                    }
-                } catch (e) {}
-            }
-
-            // 4. Fallback to searchData or string value
-            let val = null;
-            if (Array.isArray(rowData) && colIdx !== undefined) {
-                val = rowData[colIdx];
-            } else if (searchData && colIdx !== undefined && searchData[colIdx] !== undefined) {
-                val = searchData[colIdx];
-            }
-
-            if (val != null) {
-                if (typeof val === 'boolean') return val;
-                if (typeof val === 'number') return val === 1;
-                const s = String(val);
                 if (/checked/i.test(s)) return true;
                 const clean = s.replace(/<[^>]*>/g, '').trim().toLowerCase();
-                return clean === '1' || clean === 'true' || clean === 'y' || clean === 'ya' || clean === 'sudah' || clean === 'valid';
+                if (clean === '') return null;
+                if (clean === '1' || clean === 'true' || clean === 'y' || clean === 'ya' || clean === 'sudah' || clean === 'valid' || clean === '✔' || clean === '✓') return true;
+                if (clean === '0' || clean === 'false' || clean === 'n' || clean === 'tidak' || clean === 'belum' || clean === '-') return false;
+                return null;
+            };
+
+            const evalFromObj = (obj) => {
+                if (!obj || typeof obj !== 'object') return null;
+                const candidates = [];
+                if (!Array.isArray(obj)) {
+                    ['status_peta', 'is_peta', 'statusPeta', 'isPeta', 'peta'].forEach(k => {
+                        if (k in obj) candidates.push(obj[k]);
+                    });
+                    if (hasCol) {
+                        if (colIdx in obj) candidates.push(obj[colIdx]);
+                        const ks = String(colIdx);
+                        if (ks in obj) candidates.push(obj[ks]);
+                    }
+                } else if (hasCol) {
+                    candidates.push(obj[colIdx]);
+                }
+                for (const c of candidates) {
+                    const r = evalVal(c);
+                    if (r !== null) return r;
+                }
+                return null;
+            };
+
+            // 2. Direct check on the raw row object (works for AJAX/fetched rows).
+            let r = evalFromObj(rowData);
+            if (r !== null) return r;
+
+            // 3. dt.row().data() snapshot (server/client data store).
+            if (dt && hasIdx) {
+                try {
+                    r = evalFromObj(dt.row(rowIdx).data());
+                    if (r !== null) return r;
+                } catch (e) {}
+            }
+
+            // 4. searchData fallback (DataTables filter data array).
+            if (searchData && hasCol && searchData[colIdx] !== undefined) {
+                r = evalVal(searchData[colIdx]);
+                if (r !== null) return r;
             }
 
             return false;
@@ -1489,8 +1543,16 @@
             optU.textContent = '⬜ Belum Dipetakan';
             statusPetaSelect.appendChild(optU);
 
+            const ensureFullDataGlobal = () => {
+                if (window._tmFullData && window._tmFullData[tableId] && typeof window._tmFullData[tableId].ensure === 'function') {
+                    try { window._tmFullData[tableId].ensure(); } catch (_) {}
+                }
+            };
+
             statusPetaSelect.addEventListener('change', () => {
                 selectedStatusPeta = statusPetaSelect.value;
+                // Proposal 3: load full dataset on demand so this filter spans all pages.
+                ensureFullDataGlobal();
                 if (typeof jQuery !== 'undefined' && jQuery.fn.DataTable) {
                     const $t = jQuery('#' + tableId);
                     if ($t.length && jQuery.fn.DataTable.isDataTable($t)) {
@@ -1556,6 +1618,10 @@
 
             regionSelect.addEventListener('change', () => {
                 selectedWilayah = regionSelect.value;
+                // Proposal 3: load full dataset on demand so this filter spans all pages.
+                if (window._tmFullData && window._tmFullData[tableId] && typeof window._tmFullData[tableId].ensure === 'function') {
+                    try { window._tmFullData[tableId].ensure(); } catch (_) {}
+                }
                 if (typeof jQuery !== 'undefined' && jQuery.fn.DataTable) {
                     const $t = jQuery('#' + tableId);
                     if ($t.length && jQuery.fn.DataTable.isDataTable($t)) {
@@ -1615,81 +1681,445 @@
             const $tbl = jQuery('#' + tableId);
             if ($tbl.length && jQuery.fn.DataTable.isDataTable($tbl)) {
                 const dt = $tbl.DataTable();
+                const isServerSideTable = !!(dt.settings()[0] && (dt.settings()[0].oFeatures ? dt.settings()[0].oFeatures.bServerSide : dt.settings()[0].serverSide));
+
+                // ── Full pull-all mode (eager) for global filters/search ─────
+                // Server-side DT only holds the current page in browser memory.
+                // "Full send": pull ALL pages automatically on init so Wilayah/
+                // Status Peta filters, counts, and client search span the entire
+                // dataset, then switch to client-side for instant global behavior.
+                // - Background parallel fetch via direct jQuery.ajax (no dt.draw/
+                //   dt.page jumps) so the table view & UI stay responsive.
+                // - No popups/toasts/processing overlays while streaming data.
+                // - Cached for this page session; Download All piggybacks on it.
+                let tmFullDataReady = !isServerSideTable;
+                let tmFullDataLoading = false;
+                let tmFullRows = [];
+                let tmLoadedCount = 0;
+                let tmTotalCount = 0;
+                let tmLoadPromise = null;
+                let tmLoadedChunks = [];
+
+                const setStatusPetaOption = (val, text) => {
+                    if (!statusPetaSelect) return;
+                    let opt = statusPetaSelect.querySelector(`option[value="${val}"]`);
+                    if (!opt) {
+                        opt = document.createElement('option');
+                        opt.value = val;
+                        statusPetaSelect.appendChild(opt);
+                    }
+                    opt.textContent = text;
+                };
+
+                const countRowNop = (rawRow, nopColIdx) => {
+                    if (rawRow && typeof rawRow === 'object' && !Array.isArray(rawRow)) {
+                        return rawRow.nop_pbb || rawRow.nop || rawRow[nopColIdx] || '';
+                    } else if (Array.isArray(rawRow)) {
+                        return rawRow[nopColIdx] || '';
+                    }
+                    return '';
+                };
+
                 const updateDynamicCounts = () => {
-                    // Update Region & Kecamatan counts
+                    // ── Region & Kecamatan counts ──
                     if (regionSelect) {
                         const nopColIdx = findNopColumnIndex();
-                        const allNops = dt.column(nopColIdx, { search: 'none' }).data().toArray();
+                        let totalCount = 0;
+                        let partial = false;
                         const rCounts = { Barat: 0, Selatan: 0, Utara: 0 };
                         const kCounts = {};
 
-                        allNops.forEach(raw => {
+                        const tallyNop = (raw) => {
                             const text = String(raw == null ? '' : raw).replace(/<[^>]*>/g, '').trim();
                             const r = getWilayahFromNop(text);
-                            if (r && rCounts[r] !== undefined) {
-                                rCounts[r]++;
-                            }
+                            if (r && rCounts[r] !== undefined) rCounts[r]++;
                             const k = getKecamatanCodeFromNop(text);
-                            if (k) {
-                                kCounts[k] = (kCounts[k] || 0) + 1;
-                            }
-                        });
+                            if (k) kCounts[k] = (kCounts[k] || 0) + 1;
+                        };
+
+                        if (tmFullDataReady) {
+                            dt.rows({ search: 'none' }).every(function () {
+                                tallyNop(countRowNop(this.data(), nopColIdx));
+                            });
+                            totalCount = dt.rows({ search: 'none' }).count();
+                        } else if (tmFullDataLoading) {
+                            tmLoadedChunks.forEach((chunk) => {
+                                if (!chunk) return;
+                                chunk.forEach((rawRow) => tallyNop(countRowNop(rawRow, nopColIdx)));
+                            });
+                            totalCount = tmLoadedCount;
+                            partial = true;
+                        } else {
+                            const allNops = dt.column(nopColIdx, { search: 'none' }).data().toArray();
+                            allNops.forEach(tallyNop);
+                            totalCount = (dt.page.info && dt.page.info().recordsTotal) || allNops.length || 0;
+                        }
 
                         const oAll = regionSelect.querySelector('option[value="ALL"]');
-                        if (oAll) oAll.textContent = `🌐 Semua Wilayah (${allNops.length})`;
+                        if (oAll) {
+                            if (tmFullDataReady) {
+                                oAll.textContent = `🌐 Semua Wilayah (${totalCount})`;
+                            } else if (tmFullDataLoading) {
+                                oAll.textContent = `🌐 Semua Wilayah (${totalCount} / ${tmTotalCount || '?'})`;
+                            } else {
+                                const grand = (dt.page.info && dt.page.info().recordsTotal) || totalCount || 0;
+                                oAll.textContent = grand > totalCount
+                                    ? `🌐 Semua Wilayah (${grand}, memuat…)`
+                                    : `🌐 Semua Wilayah (${totalCount})`;
+                            }
+                        }
 
                         REGIONS.forEach(reg => {
                             const oReg = regionSelect.querySelector(`option[value="${reg.id}"]`);
-                            if (oReg) oReg.textContent = `${reg.icon} Semua ${reg.name} (${rCounts[reg.id] || 0})`;
-
+                            if (oReg) oReg.textContent = tmFullDataReady
+                                ? `${reg.icon} Semua ${reg.name} (${rCounts[reg.id] || 0})`
+                                : `${reg.icon} Semua ${reg.name} (${rCounts[reg.id] || 0}${partial ? '+' : ''})`;
                             reg.kecamatan.forEach(k => {
                                 const oK = regionSelect.querySelector(`option[value="${k.code}"]`);
-                                if (oK) oK.textContent = `${k.code} - ${k.name} (${kCounts[k.code] || 0})`;
+                                if (oK) oK.textContent = tmFullDataReady
+                                    ? `${k.code} - ${k.name} (${kCounts[k.code] || 0})`
+                                    : `${k.code} - ${k.name} (${kCounts[k.code] || 0}${partial ? '+' : ''})`;
                             });
                         });
                     }
 
-                    // Update Status Peta options & dynamic counts (Checkbox centang)
+                    // ── Status Peta counts ──
                     if (statusPetaSelect) {
                         const spColIdx = findStatusPetaColumnIndex();
                         if (spColIdx !== -1) {
                             let countChecked = 0;
                             let countUnchecked = 0;
-                            const totalRows = dt.rows({ search: 'none' }).count();
+                            let totalRows = 0;
+                            let partial = false;
+                            if (tmFullDataReady) {
+                                totalRows = dt.rows({ search: 'none' }).count();
+                                dt.rows({ search: 'none' }).every(function (rIdx) {
+                                    const isChecked = isRowPetaChecked(dt, rIdx, spColIdx, this.data());
+                                    if (isChecked) countChecked++; else countUnchecked++;
+                                });
+                            } else if (tmFullDataLoading) {
+                                tmLoadedChunks.forEach((chunk) => {
+                                    if (!chunk) return;
+                                    chunk.forEach((rawRow) => {
+                                        const isChecked = isRowPetaChecked(null, -1, spColIdx, rawRow);
+                                        if (isChecked) countChecked++; else countUnchecked++;
+                                    });
+                                });
+                                totalRows = tmLoadedCount;
+                                partial = true;
+                            } else {
+                                // Before full load: count over rows currently in memory (page) so
+                                // numbers are consistent; label separately indicates scope.
+                                totalRows = dt.rows({ search: 'none' }).count();
+                                dt.rows({ search: 'none' }).every(function (rIdx) {
+                                    const isChecked = isRowPetaChecked(dt, rIdx, spColIdx, this.data());
+                                    if (isChecked) countChecked++; else countUnchecked++;
+                                });
+                            }
 
-                            dt.rows({ search: 'none' }).every(function (rIdx) {
-                                const isChecked = isRowPetaChecked(dt, rIdx, spColIdx, this.data());
-                                if (isChecked) {
-                                    countChecked++;
-                                } else {
-                                    countUnchecked++;
-                                }
-                            });
-
-                            const currentVal = selectedStatusPeta;
-                            statusPetaSelect.innerHTML = '';
-
-                            const oAllP = document.createElement('option');
-                            oAllP.value = 'ALL';
-                            oAllP.textContent = `🗺️ Status Peta: Semua (${totalRows})`;
-                            statusPetaSelect.appendChild(oAllP);
-
-                            const oChecked = document.createElement('option');
-                            oChecked.value = 'CHECKED';
-                            oChecked.textContent = `✅ Sudah Dipetakan (${countChecked})`;
-                            statusPetaSelect.appendChild(oChecked);
-
-                            const oUnchecked = document.createElement('option');
-                            oUnchecked.value = 'UNCHECKED';
-                            oUnchecked.textContent = `⬜ Belum Dipetakan (${countUnchecked})`;
-                            statusPetaSelect.appendChild(oUnchecked);
-
-                            statusPetaSelect.value = currentVal || 'ALL';
+                            if (tmFullDataReady) {
+                                setStatusPetaOption('ALL', `🗺️ Status Peta: Semua (${totalRows})`);
+                            } else if (tmFullDataLoading) {
+                                setStatusPetaOption('ALL', `🗺️ Status Peta: Semua (${totalRows} / ${tmTotalCount || '?'})`);
+                            } else {
+                                const grand = (dt.page.info && dt.page.info().recordsTotal) || totalRows || 0;
+                                setStatusPetaOption('ALL', grand > totalRows
+                                    ? `🗺️ Status Peta: Semua (${grand}, memuat…)`
+                                    : `🗺️ Status Peta: Semua (${totalRows})`);
+                            }
+                            setStatusPetaOption('CHECKED', tmFullDataReady
+                                ? `✅ Sudah Dipetakan (${countChecked})`
+                                : `✅ Sudah Dipetakan (${countChecked}${partial ? '+' : ''})`);
+                            setStatusPetaOption('UNCHECKED', tmFullDataReady
+                                ? `⬜ Belum Dipetakan (${countUnchecked})`
+                                : `⬜ Belum Dipetakan (${countUnchecked}${partial ? '+' : ''})`);
+                            statusPetaSelect.value = selectedStatusPeta || 'ALL';
                         }
                     }
                 };
-                dt.off('draw.tmRegionCount').on('draw.tmRegionCount', updateDynamicCounts);
+
+                const hardHideProcessing = () => {
+                    try {
+                        const proc = document.getElementById(tableId + '_processing');
+                        if (proc) proc.style.setProperty('display', 'none', 'important');
+                        $tbl.find('.dataTables_processing').css('display', 'none');
+                    } catch (_) {}
+                };
+
+                const suppressProcessingUI = (suppress) => {
+                    // No processing popup/overlay while streaming or after full client-side switch.
+                    try {
+                        const proc = document.getElementById(tableId + '_processing');
+                        if (proc) {
+                            if (suppress || tmFullDataReady) proc.style.setProperty('display', 'none', 'important');
+                            else proc.style.removeProperty('display');
+                        }
+                    } catch (_) {}
+                    try {
+                        const settings = dt.settings()[0];
+                        if (settings && settings.oFeatures) settings.oFeatures.bProcessing = !(suppress || tmFullDataReady);
+                    } catch (_) {}
+                };
+
+                // Block DT "Sedang memproses..." indicator during our background fetch and
+                // once all data is local (client-side) — no server re-pulls happen after ready.
+                if (!$tbl.data('tmProcessingGuard')) {
+                    $tbl.data('tmProcessingGuard', true);
+                    $tbl.on('processing.dt.tmNoPopup', function () {
+                        if (tmFullDataLoading || tmFullDataReady) {
+                            hardHideProcessing();
+                        }
+                    });
+                    // CSS-level suppression so the indicator never flashes/persists.
+                    const procStyleId = 'tm-hide-processing-' + tableId;
+                    if (!document.getElementById(procStyleId)) {
+                        const st = document.createElement('style');
+                        st.id = procStyleId;
+                        st.textContent = `#${tableId}_processing, #${tableId}_wrapper .dataTables_processing { display: none !important; visibility: hidden !important; opacity: 0 !important; }`;
+                        document.head.appendChild(st);
+                    }
+                    hardHideProcessing();
+                }
+
+                const prefetchAllPagesAndEnableClientFilters = async () => {
+                    if (tmFullDataReady) return;
+                    // Refresh server-side flag at call time (init timing can vary).
+                    const settings0 = dt.settings()[0];
+                    const isSSNow = !!(settings0 && (settings0.oFeatures ? settings0.oFeatures.bServerSide : settings0.bServerSide));
+                    if (!isSSNow) { tmFullDataReady = true; updateDynamicCounts(); return; }
+                    if (!(enableRegionFilter || enableStatusPetaFilter)) { tmFullDataReady = true; return; }
+                    if (tmFullDataLoading) return;
+
+                    tmFullDataLoading = true;
+                    tmLoadedChunks = [];
+                    tmFullRows = [];
+                    tmLoadedCount = 0;
+                    tmTotalCount = 0;
+                    suppressProcessingUI(true);
+                    hardHideProcessing();
+                    updateDynamicCounts();
+
+                    try {
+                        const settings = dt.settings()[0];
+                        const info0 = (dt.page && dt.page.info) ? dt.page.info() : {};
+                        const uiPageLen = dt.page.len() || info0.length || 100;
+                        // Use a larger fetch size to reduce request count, while pulling ALL data.
+                        const fetchLen = Math.max(uiPageLen, 100);
+
+                        const ajax = settings && (settings.ajax || settings.oAjaxData);
+                        if (!ajax) throw new Error('No DataTables ajax config');
+
+                        let ajaxUrl = '';
+                        let ajaxType = 'GET';
+                        let ajaxData = {};
+                        if (typeof ajax === 'string') {
+                            ajaxUrl = ajax;
+                        } else if (typeof ajax === 'object' && ajax) {
+                            ajaxUrl = ajax.url || '';
+                            ajaxType = (ajax.type || ajax.method || 'GET').toUpperCase();
+                            if (typeof ajax.data === 'function') {
+                                try { ajaxData = ajax.data(jQuery.extend(true, {}, dt.ajax && dt.ajax.params ? dt.ajax.params() : {}), settings) || {}; } catch (_) { ajaxData = {}; }
+                            } else if (ajax.data && typeof ajax.data === 'object') {
+                                ajaxData = jQuery.extend(true, {}, ajax.data);
+                            }
+                        } else {
+                            throw new Error('Unsupported DataTables ajax config');
+                        }
+                        if (!ajaxUrl) throw new Error('No ajax URL');
+
+                        const searchAtStart = dt.search ? dt.search() : '';
+
+                        const fetchPage = async (page) => {
+                            const baseParams = (dt.ajax && typeof dt.ajax.params === 'function')
+                                ? jQuery.extend(true, {}, dt.ajax.params())
+                                : jQuery.extend(true, {}, ajaxData);
+                            baseParams.start = page * fetchLen;
+                            baseParams.length = fetchLen;
+                            baseParams.draw = (info0.draw || 0) + page + 1;
+                            // Neutralize search so we fetch the FULL, unfiltered dataset.
+                            Object.keys(baseParams).forEach((k) => {
+                                if (/(\[search\]|\bsearch\[)/.test(k)) {
+                                    if (/\[value\]$/.test(k)) baseParams[k] = '';
+                                    else if (/\[regex\]$/.test(k)) baseParams[k] = 'false';
+                                }
+                            });
+                            return jQuery.ajax({
+                                url: ajaxUrl,
+                                type: ajaxType,
+                                data: baseParams,
+                                dataType: 'json',
+                                cache: false
+                            });
+                        };
+
+                        const extractRows = (resp) => {
+                            if (!resp) return [];
+                            if (Array.isArray(resp.data)) return resp.data;
+                            if (Array.isArray(resp.aaData)) return resp.aaData;
+                            return [];
+                        };
+                        const toNum = (v) => {
+                            if (v == null) return 0;
+                            if (typeof v === 'number') return v;
+                            const n = parseInt(String(v).replace(/[^\d-]/g, ''), 10);
+                            return Number.isFinite(n) ? n : 0;
+                        };
+
+                        // Probe page 0 first to get authoritative total from server response.
+                        const resp0 = await fetchPage(0);
+                        const rows0 = extractRows(resp0);
+                        let totalRecords =
+                            toNum(resp0 && (resp0.recordsTotal ?? resp0.iTotalRecords)) ||
+                            toNum(resp0 && (resp0.recordsFiltered ?? resp0.iTotalDisplayRecords));
+                        if (!totalRecords) {
+                            totalRecords = toNum(info0.recordsTotal) || toNum(dt.page.info && dt.page.info().recordsTotal) || 0;
+                        }
+
+                        // If total is unknown/looks like just-this-page but the page is full,
+                        // we'll discover more pages by fetching until a short/empty page.
+                        let unknownTotal = false;
+                        if (!totalRecords) {
+                            unknownTotal = true;
+                            totalRecords = rows0.length;
+                        } else if (totalRecords <= rows0.length && rows0.length >= fetchLen) {
+                            // Some endpoints may report a page-sized total incorrectly; trust growth.
+                            unknownTotal = true;
+                        }
+
+                        tmLoadedChunks[0] = rows0;
+                        tmLoadedCount = rows0.length;
+                        tmTotalCount = totalRecords;
+                        updateDynamicCounts();
+
+                        let totalPages = Math.max(1, Math.ceil((tmTotalCount || rows0.length || 1) / fetchLen));
+
+                        if (totalPages > 1 || unknownTotal) {
+                            const concurrency = 8;
+                            let nextPage = 1;
+                            let doneCount = 1; // page 0 done
+                            let stopAt = unknownTotal ? Number.POSITIVE_INFINITY : totalPages;
+
+                            const worker = async () => {
+                                while (true) {
+                                    const page = nextPage++;
+                                    if (page >= stopAt) return;
+                                    const resp = await fetchPage(page);
+                                    const rows = extractRows(resp);
+                                    const rt = toNum(resp && (resp.recordsTotal ?? resp.iTotalRecords)) ||
+                                               toNum(resp && (resp.recordsFiltered ?? resp.iTotalDisplayRecords));
+                                    if (rt && rt > tmTotalCount) {
+                                        tmTotalCount = rt;
+                                        if (!unknownTotal) stopAt = Math.max(1, Math.ceil(tmTotalCount / fetchLen));
+                                    }
+                                    tmLoadedChunks[page] = rows || [];
+                                    tmLoadedCount += (rows ? rows.length : 0);
+                                    doneCount++;
+                                    if (doneCount % 10 === 0) updateDynamicCounts();
+
+                                    if (unknownTotal) {
+                                        // Update known bound if server now reports a total.
+                                        if (rt) {
+                                            unknownTotal = false;
+                                            stopAt = Math.max(1, Math.ceil(rt / fetchLen));
+                                        } else if (!rows || rows.length < fetchLen) {
+                                            // Reached the end.
+                                            stopAt = page + 1;
+                                            tmTotalCount = tmLoadedCount;
+                                        }
+                                    }
+                                    if (page + 1 >= stopAt) return;
+                                }
+                            };
+
+                            // For unknown totals, start modestly then rely on stop condition; otherwise full parallel.
+                            const workerCount = unknownTotal ? Math.min(concurrency, 4) : Math.min(concurrency, Math.max(0, totalPages - 1));
+                            const workers = [];
+                            for (let i = 0; i < workerCount; i++) workers.push(worker());
+                            await Promise.all(workers);
+                            if (unknownTotal) tmTotalCount = tmLoadedCount;
+                        }
+
+                        totalPages = Math.max(1, Math.ceil((tmTotalCount || tmLoadedCount || 1) / fetchLen));
+
+                        // Assemble in page order and switch to client-side.
+                        tmFullRows = [];
+                        for (let i = 0; i < totalPages; i++) {
+                            const chunk = tmLoadedChunks[i];
+                            if (chunk && chunk.length) tmFullRows.push(...chunk);
+                        }
+
+                        // Switch to client-side with the complete dataset (single load, cached).
+                        if (settings) {
+                            if (settings.oFeatures) settings.oFeatures.bServerSide = false;
+                            settings.bServerSide = false;
+                            settings.oFeatures.bProcessing = false;
+                            settings.ajax = null; // no further server pulls
+                            try { jQuery(settings.nTable).off('.DataTables'); } catch (_) {}
+                        }
+                        dt.clear();
+                        if (tmFullRows.length) dt.rows.add(tmFullRows);
+                        tmFullDataReady = true;
+                        tmFullDataLoading = false;
+
+                        // Reapply latest search on the now-full client-side dataset.
+                        const finalSearch = (dt.search ? dt.search() : '') || searchAtStart;
+                        if (finalSearch) dt.search(finalSearch);
+                        dt.draw(false);
+                        suppressProcessingUI(false);
+                        hardHideProcessing();
+                        updateDynamicCounts();
+                        // One more pass after draw settles so counts reflect final client-side state.
+                        setTimeout(() => { hardHideProcessing(); updateDynamicCounts(); }, 0);
+                    } catch (err) {
+                        tmFullDataLoading = false;
+                        tmLoadPromise = null; // allow retry
+                        suppressProcessingUI(false);
+                        try { console.warn('[SIE] Gagal memuat semua data:', err); } catch (_) {}
+                        updateDynamicCounts();
+                        // Silent failure: no popup/toast during streaming.
+                    }
+                };
+
+                const ensureFullData = () => {
+                    if (tmFullDataReady) return Promise.resolve();
+                    if (!isServerSideTable) { tmFullDataReady = true; return Promise.resolve(); }
+                    if (tmLoadPromise) return tmLoadPromise;
+                    tmLoadPromise = prefetchAllPagesAndEnableClientFilters().catch(() => {});
+                    return tmLoadPromise;
+                };
+
+                // Expose loader so Download All (and filters) share the same fetch/cache.
+                if (!window._tmFullData) window._tmFullData = {};
+                window._tmFullData[tableId] = {
+                    isReady: () => tmFullDataReady,
+                    isLoading: () => tmFullDataLoading,
+                    loaded: () => tmLoadedCount,
+                    total: () => tmTotalCount,
+                    ensure: () => ensureFullData(),
+                };
+
+                // Keep processing indicator hidden once we own the table (no re-pulls after ready).
+                const enforceNoProcessing = () => {
+                    if (!tmFullDataLoading && !tmFullDataReady) return;
+                    try {
+                        const proc = document.getElementById(tableId + '_processing');
+                        if (proc) proc.style.setProperty('display', 'none', 'important');
+                    } catch (_) {}
+                };
+                $tbl.on('processing.dt.tmNoPopup draw.dt.tmNoPopup', enforceNoProcessing);
+
+                dt.off('draw.tmRegionCount').on('draw.tmRegionCount', () => {
+                    enforceNoProcessing();
+                    updateDynamicCounts();
+                });
                 updateDynamicCounts();
+
+                // Full send: start pulling all data automatically (eager), without popups.
+                // Initial pull is one-time and cached in-memory; no re-pull after ready.
+                if (isServerSideTable && (enableRegionFilter || enableStatusPetaFilter)) {
+                    hardHideProcessing();
+                    setTimeout(() => { ensureFullData().catch(() => {}); }, 150);
+                }
 
                 if (enableStatusPetaFilter) {
                     table.addEventListener('change', (e) => {
